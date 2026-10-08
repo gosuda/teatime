@@ -1,0 +1,70 @@
+name: Connector release
+on:
+  push:
+    tags: ["hubconn-v*"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [windows, linux, darwin]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build standalone Connector
+        shell: bash
+        run: |
+          mkdir -p dist
+          suffix=''
+          if [ '${{ matrix.goos }}' = windows ]; then suffix=.exe; fi
+          version="${GITHUB_REF_NAME#hubconn-v}"
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags="-s -w -X tokenhub/internal/buildinfo.Version=$version" -o "dist/hubconn_${{ matrix.goos }}_${{ matrix.goarch }}$suffix" ./cmd/hubconn
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hubconn-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+  publish:
+    if: startsWith(github.ref, 'refs/tags/hubconn-v') && github.repository == (vars.CONNECTOR_RELEASE_REPOSITORY || 'gosuda/teatime')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Stage installation scripts
+        run: cp web/install.sh web/install.ps1 dist/
+      - name: Checksums
+        working-directory: dist
+        shell: bash
+        run: |
+          expected=(hubconn_darwin_amd64 hubconn_darwin_arm64 hubconn_linux_amd64 hubconn_linux_arm64 hubconn_windows_amd64.exe hubconn_windows_arm64.exe install.ps1 install.sh)
+          diff -u <(printf '%s\n' "${expected[@]}" | sort) <(find . -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)
+          test "$(find . -mindepth 1 -maxdepth 1 | wc -l)" -eq 8
+          sha256sum "${expected[@]}" > SHA256SUMS
+      - uses: actions/attest@v4
+        with:
+          subject-path: "dist/*"
+      - name: Publish installation release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          dist/hubconn_darwin_amd64 dist/hubconn_darwin_arm64
+          dist/hubconn_linux_amd64 dist/hubconn_linux_arm64
+          dist/hubconn_windows_amd64.exe dist/hubconn_windows_arm64.exe
+          dist/install.sh dist/install.ps1 dist/SHA256SUMS
+          --repo "$GITHUB_REPOSITORY" --verify-tag
+          --title "hubconn ${GITHUB_REF_NAME#hubconn-v}"
+          --notes "Standalone Connector for Windows, Linux and macOS (amd64/arm64). Includes Connector installers, SHA256SUMS and GitHub build provenance. Install gjl separately from https://gjl.io/ using its latest official release."
