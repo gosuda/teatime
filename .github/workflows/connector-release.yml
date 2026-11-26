@@ -7,12 +7,16 @@ permissions:
   contents: read
 jobs:
   build:
+    env:
+      GOENV: "off"
+      GOCACHEPROG: ""
     runs-on: depot-ubuntu-24.04-4
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: false
       - name: Build standalone Connector
         shell: bash
         run: |
@@ -29,9 +33,9 @@ jobs:
         with:
           name: hubconn
           path: dist/*
-    timeout-minutes: 15
+    timeout-minutes: 30
   publish:
-    if: startsWith(github.ref, 'refs/tags/hubconn-v') && github.repository == (vars.CONNECTOR_RELEASE_REPOSITORY || 'gosuda/teatime')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/hubconn-v') && github.repository == (vars.CONNECTOR_RELEASE_REPOSITORY || 'gosuda/teatime')
     needs: build
     runs-on: depot-ubuntu-24.04-4
     permissions:
